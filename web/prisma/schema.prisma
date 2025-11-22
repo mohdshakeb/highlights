@@ -1,0 +1,30 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Document {
+  id         String      @id @default(uuid())
+  title      String
+  content    String      @default("")
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  highlights Highlight[]
+}
+
+model Highlight {
+  id         String    @id @default(uuid())
+  text       String
+  url        String
+  title      String?
+  favicon    String?
+  createdAt  DateTime  @default(now())
+  documentId String?
+  document   Document? @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  tags       String?
+}
