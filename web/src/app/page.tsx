@@ -3,7 +3,9 @@
 import { useState, useEffect } from 'react';
 import useSWR, { mutate } from 'swr';
 import HighlightCard from '@/components/HighlightCard';
+import DocumentPreviewCard from '@/components/DocumentPreviewCard';
 import { useRouter } from 'next/navigation';
+import { getCategoryStyles, CATEGORY_CONFIG, Category, getCategoryFromUrl } from '@/utils/categories';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -29,12 +31,16 @@ interface Document {
 
 export default function Home() {
   const router = useRouter();
+  const [orderedHighlights, setOrderedHighlights] = useState<Highlight[]>([]);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [newlyCreatedDocId, setNewlyCreatedDocId] = useState<string | null>(null);
   // Use SWR for real-time updates
   const { data: highlights = [], mutate: mutateHighlights } = useSWR<Highlight[]>('/api/highlights?documentId=null', fetcher, { refreshInterval: 2000 });
   const { data: documents = [], mutate: mutateDocuments } = useSWR<Document[]>('/api/documents', fetcher, { refreshInterval: 2000 });
 
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
   const [dragOverDocId, setDragOverDocId] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
 
   // Set up intersection observer to track active document
   useEffect(() => {
@@ -71,13 +77,22 @@ export default function Home() {
       const response = await fetch('/api/documents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: 'Untitled Document' }),
+        body: JSON.stringify({ title: '' }),
       });
 
       if (response.ok) {
         const newDoc = await response.json();
-        mutateDocuments();
-        router.push(`/documents/${newDoc.id}`);
+
+        // Optimistically add the new document
+        mutateDocuments([newDoc, ...documents], false);
+        setNewlyCreatedDocId(newDoc.id);
+
+        // Scroll to the new document after a brief delay to allow rendering
+        setTimeout(() => {
+          scrollToDocument(newDoc.id);
+        }, 100);
+      } else {
+        console.error('Failed to create document');
       }
     } catch (error) {
       console.error('Error creating document:', error);
@@ -113,16 +128,16 @@ export default function Home() {
     e.dataTransfer.effectAllowed = 'move';
   };
 
-  const handleDragOver = (e: React.DragEvent, docId: string) => {
+  const handleDragOverDoc = (e: React.DragEvent, docId: string) => {
     e.preventDefault(); // Allow dropping
     setDragOverDocId(docId);
   };
 
-  const handleDragLeave = (e: React.DragEvent) => {
+  const handleDragLeaveDoc = (e: React.DragEvent) => {
     setDragOverDocId(null);
   };
 
-  const handleDrop = async (e: React.DragEvent, docId: string) => {
+  const handleDropOnDoc = async (e: React.DragEvent, docId: string) => {
     e.preventDefault();
     setDragOverDocId(null);
     const highlightId = e.dataTransfer.getData('text/plain');
@@ -152,6 +167,36 @@ export default function Home() {
     }
   };
 
+  const scrollToDocument = (docId: string) => {
+    const element = document.querySelector(`[data-id="${docId}"]`);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
+
+  const handleTitleUpdate = async (id: string, newTitle: string) => {
+    try {
+      // Optimistic update
+      mutateDocuments(documents.map(d => d.id === id ? { ...d, title: newTitle } : d), false);
+
+      await fetch(`/api/documents/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle }),
+      });
+
+      mutateDocuments();
+    } catch (error) {
+      console.error('Error updating document title:', error);
+      mutateDocuments();
+    }
+  };
+
+  // Filter highlights
+  const filteredHighlights = selectedCategory
+    ? highlights.filter(h => getCategoryFromUrl(h.url) === selectedCategory)
+    : highlights;
+
   return (
     <main style={{
       height: '100vh',
@@ -162,34 +207,35 @@ export default function Home() {
     }}>
       <div style={{
         display: 'flex',
-        width: '100%',
-        maxWidth: '1000px', // Reduced max-width to bring things closer
-        padding: '0 var(--space-4)',
-        gap: 'var(--space-4)', // Reduced gap to minimum
+        width: 'fit-content', // Only take up needed space
+        maxWidth: '100%',
+        padding: '0 24px', // Requested 24px padding
+        gap: '24px', // Reduced gap
         justifyContent: 'center',
       }}>
-        {/* Left Column: Highlights (Sticky & Scrollable) */}
+
+        {/* LEFT COLUMN: Highlights (Sticky) */}
         <div style={{
-          width: '300px', // Slightly reduced width
-          paddingTop: 'calc(50vh - 350px)', // Align start with documents
+          width: '240px', // Reduced from 300px to make sticky notes smaller
+          paddingTop: 'calc(50vh - 320px)',
           display: 'flex',
           flexDirection: 'column',
           gap: 'var(--space-4)',
           height: '100vh',
-          overflowY: 'auto', // Make scrollable
-          scrollbarWidth: 'none', // Hide scrollbar
+          overflowY: 'auto',
+          scrollbarWidth: 'none',
           paddingBottom: 'var(--space-8)',
         }}>
           <div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', padding: '10px' }}>
-              {highlights.map((highlight) => (
+              {filteredHighlights.map((highlight) => (
                 <div
                   key={highlight.id}
                   draggable
                   onDragStart={(e) => handleDragStart(e, highlight.id)}
                   style={{
                     transform: 'scale(0.95)',
-                    transformOrigin: 'center', // Changed from top left to center
+                    transformOrigin: 'center',
                     cursor: 'grab',
                   }}
                 >
@@ -207,7 +253,7 @@ export default function Home() {
                   />
                 </div>
               ))}
-              {highlights.length === 0 && (
+              {filteredHighlights.length === 0 && (
                 <div style={{
                   padding: 'var(--space-4)',
                   textAlign: 'center',
@@ -216,14 +262,14 @@ export default function Home() {
                   borderRadius: 'var(--radius-md)',
                   fontSize: '0.875rem',
                 }}>
-                  No new highlights
+                  {selectedCategory ? `No ${CATEGORY_CONFIG[selectedCategory].label} highlights` : 'No new highlights'}
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {/* Right Column: Documents (Scrollable) */}
+        {/* CENTER COLUMN: Documents (Scrollable) */}
         <div
           className="document-scroll-container"
           style={{
@@ -231,156 +277,28 @@ export default function Home() {
             height: '100vh',
             overflowY: 'auto',
             scrollSnapType: 'y mandatory',
-            paddingTop: 'calc(50vh - 350px)', // Center the first item (approx half height of card)
+            paddingTop: 'calc(50vh - 318px)', // Adjusted for 450px width (~636px height -> half is 318px)
             paddingBottom: '50vh',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: '80px', // Consistent gap
+            gap: '16px',
             scrollbarWidth: 'none',
           }}
         >
-          {/* Document List */}
           {documents.map((doc) => (
-            <div
+            <DocumentPreviewCard
               key={doc.id}
-              data-id={doc.id}
-              className="document-wrapper"
-              onDragOver={(e) => handleDragOver(e, doc.id)}
-              onDragLeave={handleDragLeave}
-              onDrop={(e) => handleDrop(e, doc.id)}
-              style={{
-                scrollSnapAlign: 'center',
-                width: '100%',
-                maxWidth: '650px',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 'var(--space-4)',
-                opacity: activeDocId === doc.id ? 1 : 0.4, // Fade out inactive docs
-                transition: 'opacity 0.3s ease',
-              }}
-            >
-              {/* The Paper */}
-              <div
-                onClick={() => router.push(`/documents/${doc.id}`)}
-                style={{
-                  flex: 1,
-                  maxWidth: '500px',
-                  aspectRatio: '1 / 1.414',
-                  backgroundColor: 'hsl(var(--surface))',
-                  boxShadow: dragOverDocId === doc.id
-                    ? '0 0 0 4px hsl(var(--primary) / 0.2), var(--shadow-xl)' // Highlight on drag over
-                    : activeDocId === doc.id ? 'var(--shadow-xl)' : 'var(--shadow-md)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '40px',
-                  cursor: 'pointer',
-                  transition: 'all 0.3s ease',
-                  overflow: 'hidden',
-                  position: 'relative',
-                  transform: activeDocId === doc.id ? 'scale(1)' : 'scale(0.98)',
-                  border: dragOverDocId === doc.id ? '2px solid hsl(var(--primary))' : 'none',
-                }}
-                className="document-paper"
-              >
-                <h3 style={{
-                  fontSize: '1.5rem',
-                  fontFamily: 'var(--font-heading)',
-                  fontWeight: 600,
-                  marginBottom: 'var(--space-4)',
-                  color: 'hsl(var(--foreground))',
-                }}>
-                  {doc.title}
-                </h3>
-                <div style={{
-                  fontSize: '0.875rem',
-                  color: 'hsl(var(--muted))',
-                  lineHeight: '1.6',
-                  whiteSpace: 'pre-wrap',
-                  display: '-webkit-box',
-                  WebkitLineClamp: 15,
-                  WebkitBoxOrient: 'vertical',
-                  overflow: 'hidden',
-                }}>
-                  {doc.content || (
-                    <span style={{ fontStyle: 'italic', opacity: 0.5 }}>Empty document...</span>
-                  )}
-                </div>
-
-                <div style={{
-                  position: 'absolute',
-                  bottom: '20px',
-                  left: '40px',
-                  fontSize: '0.75rem',
-                  color: 'hsl(var(--muted))',
-                }}>
-                  {doc._count?.highlights || 0} Highlights
-                </div>
-              </div>
-
-              {/* Floating Actions - Only visible when active */}
-              <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 'var(--space-2)',
-                paddingTop: '20px',
-                opacity: activeDocId === doc.id ? 1 : 0,
-                pointerEvents: activeDocId === doc.id ? 'auto' : 'none',
-                transition: 'opacity 0.2s ease',
-                minWidth: '120px', // Reserve space
-              }}>
-                <button
-                  onClick={() => router.push(`/documents/${doc.id}`)}
-                  style={{
-                    padding: '8px 16px',
-                    backgroundColor: 'hsl(var(--foreground))',
-                    color: 'hsl(var(--background))',
-                    border: 'none',
-                    borderRadius: 'var(--radius-md)',
-                    fontSize: '0.875rem',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                    boxShadow: 'var(--shadow-sm)',
-                    textAlign: 'left',
-                  }}
-                >
-                  Open Document
-                </button>
-                <button
-                  onClick={handleCreateDocument}
-                  style={{
-                    padding: '8px 16px',
-                    backgroundColor: 'hsl(var(--surface))',
-                    color: 'hsl(var(--foreground))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: 'var(--radius-md)',
-                    fontSize: '0.875rem',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                    boxShadow: 'var(--shadow-sm)',
-                    textAlign: 'left',
-                  }}
-                >
-                  New Document
-                </button>
-                <button
-                  onClick={(e) => handleDeleteDocument(doc.id, e)}
-                  style={{
-                    padding: '8px 16px',
-                    backgroundColor: '#fee2e2',
-                    color: '#ef4444',
-                    border: 'none',
-                    borderRadius: 'var(--radius-md)',
-                    fontSize: '0.875rem',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                    boxShadow: 'var(--shadow-sm)',
-                    textAlign: 'left',
-                  }}
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
+              doc={doc}
+              isActive={dragOverDocId === doc.id}
+              isDragOver={dragOverDocId === doc.id}
+              onDragOver={handleDragOverDoc}
+              onDragLeave={handleDragLeaveDoc}
+              onDrop={handleDropOnDoc}
+              onDelete={handleDeleteDocument}
+              onTitleUpdate={handleTitleUpdate}
+              autoFocus={doc.id === newlyCreatedDocId}
+            />
           ))}
 
           {documents.length === 0 && (
@@ -407,18 +325,161 @@ export default function Home() {
             </div>
           )}
         </div>
-      </div>
 
-      <style jsx global>{`
-        .document-paper:hover {
-          transform: translateY(-2px);
-        }
-        .document-card:hover {
-          transform: scale(1.02);
-          border-color: hsl(var(--primary));
-          color: hsl(var(--primary));
-        }
-      `}</style>
+        {/* RIGHT COLUMN: Document Index (Sticky) */}
+        <div style={{
+          width: '250px',
+          paddingTop: 'calc(50vh - 300px)',
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100vh',
+          position: 'sticky',
+          top: 0,
+          justifyContent: 'space-between', // Push content to edges
+          paddingBottom: 'calc(50vh - 300px)',
+        }}>
+
+          {/* Category Tags */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+            <span style={{ fontSize: '1rem', color: 'hsl(var(--foreground))', fontWeight: 500 }}>Select the source type of collected excerpts</span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+              <button
+                onClick={() => setSelectedCategory(null)}
+                style={{
+                  padding: '4px 12px',
+                  borderRadius: '100px',
+                  border: '1px solid',
+                  borderColor: selectedCategory === null ? 'hsl(var(--foreground))' : 'transparent',
+                  backgroundColor: selectedCategory === null ? 'hsl(var(--foreground))' : 'hsl(var(--muted) / 0.1)',
+                  color: selectedCategory === null ? 'hsl(var(--background))' : 'hsl(var(--muted))',
+                  fontSize: '0.75rem',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                All
+              </button>
+              {(['social', 'article', 'academic', 'ai'] as Category[]).map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
+                  style={{
+                    padding: '4px 12px',
+                    borderRadius: '100px',
+                    border: '1px solid',
+                    borderColor: selectedCategory === cat ? CATEGORY_CONFIG[cat].borderColor : 'transparent',
+                    backgroundColor: selectedCategory === cat ? CATEGORY_CONFIG[cat].color : 'hsl(var(--muted) / 0.1)',
+                    color: selectedCategory === cat ? CATEGORY_CONFIG[cat].textColor : 'hsl(var(--muted))',
+                    fontSize: '0.75rem',
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  {CATEGORY_CONFIG[cat].label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Document List - Bottom Aligned */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', flex: 1, justifyContent: 'flex-end', paddingBottom: 'var(--space-8)' }}>
+            {documents.map((doc) => {
+              const isActive = activeDocId === doc.id;
+              return (
+                <button
+                  key={doc.id}
+                  onClick={() => scrollToDocument(doc.id)}
+                  className="nav-item"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    textAlign: 'left',
+                    padding: '6px 0', // Reduced padding
+                    fontSize: '0.85rem', // Reduced font size
+                    color: isActive ? 'hsl(var(--foreground))' : 'hsl(var(--muted))',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    fontWeight: isActive ? 500 : 400, // Reduced weight
+                    position: 'relative',
+                    opacity: isActive ? 1 : 0.6, // Make inactive items more subtle
+                    transition: 'opacity 0.2s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) e.currentTarget.style.opacity = '1';
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) e.currentTarget.style.opacity = '0.6';
+                  }}
+                >
+                  {/* Dot Indicator */}
+                  <span style={{
+                    width: '6px', // Smaller dot
+                    height: '6px',
+                    borderRadius: '50%',
+                    border: isActive ? 'none' : '1px solid currentColor', // Thinner border, use current color
+                    backgroundColor: isActive ? 'hsl(var(--foreground))' : 'transparent', // Solid black for active
+                    flexShrink: 0,
+                    transition: 'all 0.2s ease',
+                  }} />
+
+                  {/* Text Label */}
+                  <span
+                    className="nav-text"
+                    style={{
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      transition: 'transform 0.2s ease', // Smooth movement
+                    }}
+                  >
+                    {doc.title}
+                  </span>
+                </button>
+              );
+            })}
+            <style jsx>{`
+              .nav-item:hover .nav-text {
+                transform: translateX(4px); /* Move ONLY text */
+                color: hsl(var(--foreground));
+              }
+              .nav-item:hover {
+                color: hsl(var(--foreground)); /* Darken text on hover */
+              }
+            `}</style>
+          </div>
+
+          {/* Create Button (Bottom) */}
+          <button
+            onClick={handleCreateDocument}
+            style={{
+              padding: '8px 16px',
+              backgroundColor: 'hsl(var(--foreground))',
+              color: 'hsl(var(--background))',
+              border: 'none',
+              borderRadius: 'var(--radius-md)',
+              cursor: 'pointer',
+              fontSize: '0.8rem',
+              fontWeight: 500,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              width: 'fit-content',
+              boxShadow: 'var(--shadow-sm)',
+              transition: 'transform 0.1s ease',
+            }}
+            onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.98)'}
+            onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+          >
+            + New Document
+          </button>
+        </div>
+
+      </div>
     </main>
   );
 }

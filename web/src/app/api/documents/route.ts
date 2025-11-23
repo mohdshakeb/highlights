@@ -29,12 +29,13 @@ export async function POST(request: Request) {
         const body = await request.json();
         const { title, content = '' } = body;
 
-        if (!title) {
-            return NextResponse.json(
-                { error: 'Title is required' },
-                { status: 400 }
-            );
-        }
+        // Allow empty titles for initial creation
+        // if (!title) {
+        //     return NextResponse.json(
+        //         { error: 'Title is required' },
+        //         { status: 400 }
+        //     );
+        // }
 
         const document = await prisma.document.create({
             data: {
